@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <script type="text/javascript" src="../lib/adapter.js"></script>
+    <style type="text/css">
+        .bg{
+            background: pink;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- autoplay字段很重要，你可以不加这个字段试试，你会发现这个video图像是不会动的，因为它只是一帧 -->
+    <video id="localVideo" width="300px" autoplay class="bg"></video>
+    <video id="remoteVideo" width="300px" autoplay class="bg"></video>
+
+    <div>
+      <button id="startButton">开始</button>
+      <button id="callButton">呼叫</button>
+      <button id="hangupButton">保持</button>
+    </div>
+
+    <script type="text/javascript">
+        var startButton = document.getElementById('startButton');
+        var callButton = document.getElementById('callButton');
+        var hangupButton = document.getElementById('hangupButton');
+
+        callButton.disabled = true;
+        hangupButton.disabled = true;
+        startButton.onclick = start;
+        callButton.onclick = call;
+        hangupButton.onclick = hangup;
+
+        var startTime;
+        var localVideo = document.getElementById('localVideo');
+        var remoteVideo = document.getElementById('remoteVideo');
+
+        localVideo.addEventListener('loadedmetadata', function(){
+            trace('本地视频宽度: '+this.videoWidth + '高度: '+ this.videoHeight);
+        });
+
+        remoteVideo.addEventListener('loadedmetadata', function(){
+            trace('本地视频宽度: '+this.videoWidth + '高度: '+ this.videoHeight);
+        });
+
+        var localStream;
+        var remoteStream;
+        var pc1;
+        var pc2;
+        var offerOptions = {
+            offerToReceiveAudio: 1,
+            offerToReceiveVideo: 1
+        };
+
+        function getName(pc){
+            return pc === pc1 ? 'pc1':'pc2'
+        }
+
+        function getOtherPc(pc){
+            return pc === pc1 ? pc2:pc1;
+        }
+
+        function gotStream(stream){
+            trace('收到本地视频流');
+            callButton.disabled = false;
+            localVideo.srcObject = stream;
+            localStream = stream;
+        }
+
+        function start(){
+            startButton.disabled = true;
+            trace('开始请求视频流');
+            navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: true
+            })
+            .then(gotStream)
+            .catch(function(e){
+                trace('获取视频流失败');
+                console.error(e);
+            });
+        }
+
+        function call(){
+            callButton.disabled = true;
+            hangupButton.disabled = false;
+
+            trace('开始呼叫');
+
+            var videoTracks = localStream.getVideoTracks();
+            var audioTracks = localStream.getAudioTracks();
+
+            if(videoTracks.length > 0){
+                trace('使用视频设备：'+ videoTracks[0].label);
+            }
+            if(audioTracks.length > 0){
+                trace('使音频设备：'+ audioTracks[0].label);
+            }
+
+            servers = null;
+
+            pc1 = new RTCPeerConnection(servers);
+            trace('创建本地端链接对象pc1');
+
+            // 当本地ICE Agent需要通过信号服务器发送信息到其他端时
+            // 会触发icecandidate事件回调
+            pc1.onicecandidate = function(e){
+                onIceCandidate(pc1, e);
+            };
+
+            pc2 = new RTCPeerConnection(servers);
+            pc2.onicecandidate = function(e){
+                onIceCandidate(pc2, e);
+            };
+
+            // 当链接状态发生改变时触发回调
+            // e.iceConnectionState: failed | disconnected | closed
+            pc1.oniceconnectionstatechange = function(e){
+                onIceStateChange(pc1, e);
+            };
+            pc2.oniceconnectionstatechange = function(e){
+                onIceStateChange(pc2, e);
+            };
+
+
+            pc2.onaddstream = gotRemoteStream;
+            pc1.addStream(localStream);
+            trace('将本地视频流加入pc1');
+
+            trace('pc1 开始创建sdp offer');
+
+            pc1.createOffer(offerOptions)
+            .then(onCreateOfferSuccess, onCreateSessionDescriptionError);
+        }
+
+        function onCreateSessionDescriptionError(error){
+            trace('创建sdp offer失败: '+ error.toString());
+        }
+
+        function onCreateOfferSuccess(desc){
+            trace('pc1 Offer\n'+desc.sdp);
+
+            trace('pc1 开始 设置本地描述符');
+            pc1.setLocalDescription(desc)
+            .then(function(){
+                onSetLocalSuccess(pc1);
+            }, onSetSessionDescriptionError);
+
+            trace('pc2 开始 设置远程描述符');
+            pc2.setRemoteDescription(desc)
+            .then(function(){
+                onSetLocalSuccess(pc2);
+            }, onSetSessionDescriptionError);
+
+            trace('pc2 开始应答');
+            pc2.createAnswer()
+            .then(onCreateAnswerSuccess, onCreateSessionDescriptionError);
+        }
+
+        function onSetLocalSuccess(pc){
+            trace(getName(pc) + '设置本地描述符成功');
+        }
+
+        function onSetRemoteSuccess(pc){
+            trace(getName(pc)+ '设置远程描述符成功');
+        }
+
+        function onSetSessionDescriptionError(error){
+            trace('设置本地描述符失败：' + error.toString());
+        }
+
+        function gotRemoteStream(e){
+            remoteStream = remoteVideo.srcObject = e.stream;
+            trace('pc2 收到远程视频流');
+        }
+
+        function onCreateAnswerSuccess(desc){
+            trace('pc2 应答成功:\n'+ desc.sdp);
+            trace('pc2 开始设置本地视频描述');
+
+            pc2.setLocalDescription(desc)
+            .then(function(){
+                onSetLocalSuccess(pc2);
+            }, onSetSessionDescriptionError);
+
+            pc1.setRemoteDescription(desc)
+            .then(function(){
+                onSetRemoteSuccess(pc1);
+            }, onSetSessionDescriptionError);
+        }
+
+        function onIceCandidate(pc, event){
+            if(event.candidate){
+                getOtherPc(pc).addIceCandidate(new RTCIceCandidate(event.candidate))
+                .then(function(){
+                    trace(getName(pc) + '增加候选者成功');
+                }, function(error){
+                    trace(getName(pc) + '增加候选者失败' + error.toString());
+                });
+            }
+        }
+
+        function onIceStateChange(pc, event){
+            if(pc){
+                trace(getName(pc) + 'ICE state:' + pc.iceConnectionState);
+                console.log('ICE state change:', event);
+            }
+        }
+
+        function hangup(){}
+
+        function trace(text){
+            if( text[text.length - 1] === '\n'){
+                text = text.substring(0, text.length -1);
+            }
+
+            var now = (window.performance.now()/1000).toFixed(3);
+            console.log(now + ': '+text);
+        }
+    </script>
+</body>
+
+</html>

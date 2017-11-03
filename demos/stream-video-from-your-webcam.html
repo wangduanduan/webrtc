@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+</head>
+
+<body>
+
+    <!-- autoplay字段很重要，你可以不加这个字段试试，你会发现这个video图像是不会动的，因为它只是一帧 -->
+    <video autoplay id="wdd"></video>
+
+    <script type="text/javascript">
+    var video = document.getElementById('wdd');
+
+    // 检测浏览器是getUserMedia的方法名，不同浏览器可能有不同的前缀
+    navigator.getUserMedia = navigator.getUserMedia ||
+        navigator.webkitGetUserMedia ||
+        navigator.mozGetUserMedia ||
+        navigator.msGetUserMedia;
+
+    // 判断浏览器是否支持WebRTC
+    if (navigator.getUserMedia) {
+        initVideo();
+    } else {
+        alert('你的浏览器不支持WebRTC');
+    }
+
+    function initVideo(){
+
+        navigator.getUserMedia({
+            audio: false,
+            video: true
+        }, function(stream){
+            // 将流对象暴露在全局环境，方便打印
+            window.stream = stream;
+            video.srcObject = stream;
+        }, function(error){
+            console.error(error);
+        });
+    }
+    </script>
+</body>
+
+</html>
